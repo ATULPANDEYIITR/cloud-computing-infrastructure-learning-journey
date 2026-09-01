@@ -1,5 +1,5 @@
 # ============================================================
-# DAY 01: CLOUD COMPUTING FUNDAMENTALS
+# DAY 00: CLOUD COMPUTING FUNDAMENTALS
 # ============================================================
 
 print("DAY 01 - CLOUD COMPUTING FUNDAMENTALS")
