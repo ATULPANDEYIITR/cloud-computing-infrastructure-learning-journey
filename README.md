@@ -12,7 +12,6 @@
 |      8 | Day 08 | Core Cloud Infrastructure Components      | Compute, storage, networking, databases, security, identity, monitoring, automation                                                                                           | Cloud Console                                   |
 |      9 | Day 09 | Cloud Architecture Fundamentals           | Infrastructure layers, application layers, service dependencies, cloud architecture patterns                                                                                  | Draw.io, Cloud Architecture Diagrams            |
 |     10 | Day 10 | Cloud Fundamentals Review and Project     | Design a basic cloud architecture combining compute, storage, networking, security, and users                                                                                 | Draw.io, Cloud Console                          |
-
 | 11 | Day 11 | Introduction to Linux | Linux history, distributions, kernel, shell, command line, cloud Linux servers | Ubuntu, Terminal |
 | 12 | Day 12 | Linux Installation and Environment | Virtual machines, Linux installation, terminal environment, SSH basics, remote server access | VirtualBox, Ubuntu, SSH |
 | 13 | Day 13 | Linux File System | Filesystem hierarchy, directories, paths, files, symbolic links, mounts | Linux Terminal |
@@ -23,7 +22,6 @@
 | 18 | Day 18 | Linux Networking | Network interfaces, IP addresses, DNS configuration, routing basics, ports | ip, ping, ss, netstat |
 | 19 | Day 19 | Bash Shell Scripting | Variables, conditions, loops, functions, arguments, automation scripts | Bash |
 | 20 | Day 20 | Linux Administration Project | Server setup, users, SSH hardening, services, permissions, automation | Ubuntu, SSH, Bash |
-
 | 21 | Day 21 | Networking Fundamentals | Networks, clients, servers, packets, protocols, ports, network devices | Wireshark Concepts |
 | 22 | Day 22 | OSI Model | Physical, data link, network, transport, session, presentation, application layers | Wireshark |
 | 23 | Day 23 | TCP/IP Model | Network access, internet, transport, application layers, protocol mapping | Wireshark |
@@ -34,7 +32,6 @@
 | 28 | Day 28 | HTTP and HTTPS | HTTP methods, status codes, headers, TLS, SSL certificates, HTTPS communication | curl, Postman |
 | 29 | Day 29 | Routing and NAT | Routing tables, gateways, routers, NAT, private-to-public communication | traceroute, ip route |
 | 30 | Day 30 | Load Balancing Fundamentals | Layer 4, Layer 7, traffic distribution, health checks, sticky sessions | Nginx, HAProxy |
-
 | 31 | Day 31 | Virtualization Fundamentals | Physical servers, virtual machines, resource abstraction, virtualization benefits | VirtualBox |
 | 32 | Day 32 | Hypervisors | Type 1 and Type 2 hypervisors, virtualization architecture | VMware Concepts, VirtualBox |
 | 33 | Day 33 | Virtual Machines | VM lifecycle, CPU allocation, memory allocation, virtual disks, snapshots | VirtualBox |
@@ -45,7 +42,6 @@
 | 38 | Day 38 | Data Center Infrastructure | Servers, racks, power, cooling, redundancy, physical networking | Data Center Concepts |
 | 39 | Day 39 | Regions and Availability Zones | Geographic redundancy, failure domains, zone isolation, multi-zone architecture | AWS, Azure, Google Cloud |
 | 40 | Day 40 | Virtual Infrastructure Project | Create virtual machines, networking, storage, users, and isolated environments | VirtualBox, Ubuntu |
-
 | 41 | Day 41 | Cloud Compute Fundamentals | Instances, virtual CPUs, memory, instance families, machine images | AWS EC2, Azure VM, Google Compute Engine |
 | 42 | Day 42 | Cloud Virtual Machine Deployment | Instance creation, images, SSH keys, security groups, instance lifecycle | AWS EC2 |
 | 43 | Day 43 | Compute Scaling | Vertical scaling, horizontal scaling, scaling limits, workload planning | AWS EC2 Concepts |
@@ -61,7 +57,6 @@
 | 53 | Day 53 | Content Delivery Networks | Edge locations, caching, content distribution, cache invalidation, latency reduction | AWS CloudFront |
 | 54 | Day 54 | Cloud Load Balancers | Application load balancing, network load balancing, target groups, health checks | AWS ELB |
 | 55 | Day 55 | Compute and Storage Project | Deploy a scalable application using compute, storage, load balancing, scaling, and backups | AWS EC2, S3, EBS, ELB |
-
 | 56 | Day 56 | Database Infrastructure Fundamentals | Database servers, storage engines, transactions, replication, database availability | PostgreSQL, MySQL |
 | 57 | Day 57 | Relational Database Architecture | Schemas, tables, indexes, normalization, transactions, ACID principles | PostgreSQL |
 | 58 | Day 58 | Managed Cloud Databases | Managed database services, automated patching, backups, scaling, maintenance | AWS RDS |
@@ -72,7 +67,6 @@
 | 63 | Day 63 | Caching Infrastructure | In-memory caching, distributed cache, cache-aside, write-through, cache invalidation | Redis |
 | 64 | Day 64 | Data Warehousing Fundamentals | OLTP vs OLAP, ETL, ELT, analytical databases, columnar storage | PostgreSQL, BigQuery Concepts |
 | 65 | Day 65 | Database Infrastructure Project | Build a highly available database architecture with backups, replicas, caching, and monitoring | PostgreSQL, Redis, AWS RDS |
-
 | 66 | Day 66 | Cloud Security Fundamentals | Shared responsibility, attack surface, cloud threats, security principles | Cloud Security Concepts |
 | 67 | Day 67 | Identity and Access Management | Users, groups, roles, policies, permissions, least privilege | AWS IAM |
 | 68 | Day 68 | Authentication and Authorization | MFA, passwords, tokens, sessions, OAuth concepts, RBAC, ABAC | AWS IAM Concepts |
@@ -83,7 +77,6 @@
 | 73 | Day 73 | Vulnerability Management | CVEs, vulnerability scanning, patch management, dependency security | Trivy, CVE Databases |
 | 74 | Day 74 | Cloud Governance and Compliance | Policies, compliance, auditing, data residency, governance frameworks | AWS Config Concepts |
 | 75 | Day 75 | Cloud Security Project | Secure a complete cloud environment using IAM, encryption, network isolation, logging, and auditing | IAM, KMS, CloudTrail |
-
 | 76 | Day 76 | Introduction to Containers | Containerization, isolation, portability, container runtime concepts | Docker |
 | 77 | Day 77 | Docker Fundamentals | Docker architecture, Docker daemon, client, images, containers, registries | Docker CLI |
 | 78 | Day 78 | Docker Images and Dockerfiles | Image layers, Dockerfile instructions, image building, optimization | Docker |
@@ -94,7 +87,6 @@
 | 83 | Day 83 | Container Registries | Image repositories, tagging, versioning, private registries, image distribution | Docker Hub, AWS ECR |
 | 84 | Day 84 | Container Security | Image scanning, minimal images, vulnerabilities, runtime security, secrets | Trivy, Docker Scout |
 | 85 | Day 85 | Docker Project | Containerize a complete multi-service application with frontend, backend, database, networks, and persistent storage | Docker, Docker Compose |
-
 | 86 | Day 86 | Kubernetes Fundamentals | Container orchestration, clusters, nodes, architecture, declarative infrastructure | Kubernetes, Minikube |
 | 87 | Day 87 | Kubernetes Control Plane | API server, scheduler, controllers, etcd, cluster state management | kubectl |
 | 88 | Day 88 | Pods | Pod architecture, lifecycle, manifests, multi-container pods | kubectl |
@@ -105,7 +97,6 @@
 | 93 | Day 93 | Kubernetes Networking | CNI, pod networking, network policies, ingress, service communication | Calico Concepts, Nginx Ingress |
 | 94 | Day 94 | Kubernetes Scaling | Horizontal pod autoscaler, vertical scaling, cluster autoscaler, resource limits | Kubernetes HPA |
 | 95 | Day 95 | Kubernetes Project | Deploy a scalable multi-service application with services, storage, secrets, scaling, and ingress | Minikube, Kubernetes |
-
 | 96 | Day 96 | Infrastructure as Code Fundamentals | Declarative infrastructure, imperative vs declarative models, reproducibility, version control | Terraform |
 | 97 | Day 97 | Terraform Fundamentals | Providers, resources, variables, outputs, execution workflow | Terraform |
 | 98 | Day 98 | Terraform State Management | State files, remote state, locking, collaboration, state security | Terraform |
@@ -116,7 +107,6 @@
 | 103 | Day 103 | Advanced Ansible | Roles, templates, handlers, vaults, reusable automation | Ansible |
 | 104 | Day 104 | Infrastructure Testing and Policy | Validation, automated tests, policy-as-code, infrastructure security checks | Terraform Validate, Checkov |
 | 105 | Day 105 | Infrastructure Automation Project | Provision cloud infrastructure with reusable Terraform modules and configure systems with Ansible | Terraform, Ansible |
-
 | 106 | Day 106 | DevOps Fundamentals | DevOps culture, collaboration, automation, feedback loops, DevOps lifecycle | Git, GitHub |
 | 107 | Day 107 | CI/CD Fundamentals | Continuous integration, continuous delivery, pipelines, builds, testing, deployment | GitHub Actions |
 | 108 | Day 108 | CI/CD Pipeline Implementation | Automated testing, container builds, image publishing, automated deployment | GitHub Actions, Docker |
@@ -124,7 +114,6 @@
 | 110 | Day 110 | Logging Infrastructure | Centralized logging, log aggregation, structured logs, log analysis | ELK Stack Concepts |
 | 111 | Day 111 | Distributed Tracing | Trace IDs, spans, request flow, service dependencies, latency analysis | OpenTelemetry, Jaeger |
 | 112 | Day 112 | Site Reliability Engineering | SLI, SLO, SLA, error budgets, incident management, reliability principles | Prometheus, Grafana |
-
 | 113 | Day 113 | High Availability Architecture | Redundancy, replication, failover, load balancing, multi-zone design | AWS Architecture Concepts |
 | 114 | Day 114 | Fault-Tolerant Systems | Failure domains, graceful degradation, retries, circuit breakers, resilience patterns | Resilience Patterns |
 | 115 | Day 115 | Distributed Systems Fundamentals | Distributed computing, communication, replication, consistency, network partitions | Python, Distributed Systems Concepts |
