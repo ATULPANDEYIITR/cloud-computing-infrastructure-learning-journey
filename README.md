@@ -62,7 +62,7 @@ To understand how modern applications and computing infrastructure are built, de
 * [ ] Azure
 * [ ] Google Cloud
 
-# Day 01: Cloud Computing Fundamentals
+# Day 00: Cloud Computing Fundamentals
 
 ## Objective
 
@@ -112,9 +112,3 @@ These fundamentals provide the foundation for learning cloud platforms, virtuali
 ## Learning Approach
 
 Cloud Computing will be covered gradually, starting with fundamental concepts and progressing toward virtualization, networking, storage, cloud platforms, containers, serverless computing, security, monitoring, automation, and cloud architecture.
-
-## Day 01 Completed
-
-**Focus:** Introduction to Cloud Computing
-
-**Next:** Continue with the next concepts in Cloud Computing.
