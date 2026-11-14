@@ -1,758 +1,837 @@
-"use strict";
-
-/**
- * CLOUD SECURITY POLICY ENGINE
+/*
+ * CLOUD SECURITY GOVERNANCE ENGINE
  *
- * Node.js 18+
+ * C++17
  *
- * Event-driven cloud security assessment covering:
- * IAM, key management, encryption posture, network isolation,
- * centralized audit events, and compliance evaluation.
+ * Implements:
+ * - IAM authorization with explicit deny precedence
+ * - Least-privilege policy evaluation
+ * - Encryption posture and key lifecycle
+ * - Network segmentation
+ * - Security audit records
+ * - Centralized security findings
+ * - Merge-independent cloud compliance evaluation
  *
- * Cryptographic operations are represented through managed KMS
- * key metadata. This program does not implement encryption itself.
+ * Cryptographic encryption is represented through managed key
+ * metadata. Production encryption must use a managed KMS/HSM.
  */
 
-const crypto = require("node:crypto");
-const fs = require("node:fs");
-const path = require("node:path");
-const EventEmitter = require("node:events");
+#include <algorithm>
+#include <ctime>
+#include <iomanip>
+#include <iostream>
+#include <map>
+#include <optional>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+using namespace std;
 
 // ============================================================
-// CONFIGURATION
+// ENUMERATIONS
 // ============================================================
 
-const CONFIG = Object.freeze({
-    project: "SecureCloud",
-    auditFile: path.resolve("cloud_security_events.jsonl"),
-    maximumAuditEvents: 100000,
-    environments: ["development", "staging", "production"]
-});
+enum class Effect {
+    ALLOW,
+    DENY
+};
 
-const SEVERITY = Object.freeze({
-    INFO: 1,
-    LOW: 2,
-    MEDIUM: 3,
-    HIGH: 4,
-    CRITICAL: 5
-});
+enum class Severity {
+    LOW,
+    MEDIUM,
+    HIGH,
+    CRITICAL
+};
 
-class SecurityError extends Error {
-    constructor(message) {
-        super(message);
-        this.name = "SecurityError";
+enum class Environment {
+    DEVELOPMENT,
+    STAGING,
+    PRODUCTION
+};
+
+enum class ResourceState {
+    ACTIVE,
+    ENCRYPTED,
+    BLOCKED
+};
+
+string toString(Severity severity) {
+    switch (severity) {
+        case Severity::LOW: return "LOW";
+        case Severity::MEDIUM: return "MEDIUM";
+        case Severity::HIGH: return "HIGH";
+        case Severity::CRITICAL: return "CRITICAL";
+    }
+
+    return "UNKNOWN";
+}
+
+string toString(Effect effect) {
+    return effect == Effect::ALLOW ? "ALLOW" : "DENY";
+}
+
+// ============================================================
+// VALIDATION
+// ============================================================
+
+void validateString(const string& value, const string& field) {
+    if (value.empty() || value.size() > 128) {
+        throw invalid_argument("Invalid " + field);
     }
 }
 
-function validateString(value, name) {
-    if (
-        typeof value !== "string" ||
-        value.trim().length === 0 ||
-        value.length > 128
-    ) {
-        throw new SecurityError(`Invalid ${name}`);
-    }
-}
+bool matches(const string& pattern, const string& value) {
+    if (pattern == "*") return true;
 
-function identifier() {
-    return crypto.randomUUID();
-}
-
-function matches(pattern, value) {
-    if (pattern === "*") return true;
-
-    if (pattern.endsWith("*")) {
-        return value.startsWith(pattern.slice(0, -1));
+    if (!pattern.empty() && pattern.back() == '*') {
+        return value.compare(
+            0,
+            pattern.size() - 1,
+            pattern.substr(0, pattern.size() - 1)
+        ) == 0;
     }
 
-    return pattern === value;
+    return pattern == value;
+}
+
+string timestamp() {
+    time_t now = time(nullptr);
+    tm utc{};
+
+#ifdef _WIN32
+    gmtime_s(&utc, &now);
+#else
+    gmtime_r(&now, &utc);
+#endif
+
+    ostringstream output;
+
+    output << put_time(&utc, "%Y-%m-%dT%H:%M:%SZ");
+
+    return output.str();
 }
 
 // ============================================================
-// IAM POLICY MODEL
+// IAM POLICY
 // ============================================================
+
+struct PolicyStatement {
+    Effect effect;
+    set<string> actions;
+    set<string> resources;
+};
 
 class IAMPolicy {
-    constructor(name, statements = []) {
-        validateString(name, "policy name");
 
-        this.name = name;
-        this.statements = [];
-        this.version = 1;
+private:
+    vector<PolicyStatement> statements;
 
-        for (const statement of statements) {
-            this.addStatement(statement);
-        }
-    }
+public:
 
-    addStatement(statement) {
+    void addStatement(const PolicyStatement& statement) {
         if (
-            !["ALLOW", "DENY"].includes(statement.effect) ||
-            !Array.isArray(statement.actions) ||
-            !Array.isArray(statement.resources) ||
-            statement.actions.length === 0 ||
-            statement.resources.length === 0
+            statement.actions.empty() ||
+            statement.resources.empty()
         ) {
-            throw new SecurityError("Invalid IAM policy statement");
+            throw invalid_argument("Empty IAM statement");
         }
 
-        this.statements.push(Object.freeze({
-            effect: statement.effect,
-            actions: [...statement.actions],
-            resources: [...statement.resources]
-        }));
-
-        this.version++;
+        statements.push_back(statement);
     }
 
-    evaluate(action, resource) {
-        let allowed = false;
+    bool authorize(
+        const string& action,
+        const string& resource
+    ) const {
 
-        for (const statement of this.statements) {
-            const actionMatch = statement.actions.some(
-                pattern => matches(pattern, action)
+        bool allowed = false;
+
+        for (const auto& statement : statements) {
+
+            bool actionMatch = any_of(
+                statement.actions.begin(),
+                statement.actions.end(),
+                [&](const string& pattern) {
+                    return matches(pattern, action);
+                }
             );
 
-            const resourceMatch = statement.resources.some(
-                pattern => matches(pattern, resource)
+            bool resourceMatch = any_of(
+                statement.resources.begin(),
+                statement.resources.end(),
+                [&](const string& pattern) {
+                    return matches(pattern, resource);
+                }
             );
 
-            if (!actionMatch || !resourceMatch) continue;
+            if (!actionMatch || !resourceMatch) {
+                continue;
+            }
 
-            if (statement.effect === "DENY") {
+            if (statement.effect == Effect::DENY) {
                 return false;
             }
 
-            if (statement.effect === "ALLOW") {
+            if (statement.effect == Effect::ALLOW) {
                 allowed = true;
             }
         }
 
         return allowed;
     }
-}
+};
 
-class Identity {
-    constructor({
-        id,
-        policy,
-        active = true,
-        mfa = false,
-        privileged = false
-    }) {
-        validateString(id, "identity ID");
-
-        this.id = id;
-        this.policy = policy;
-        this.active = active;
-        this.mfa = mfa;
-        this.privileged = privileged;
-    }
-}
+struct Identity {
+    string id;
+    IAMPolicy policy;
+    bool active = true;
+    bool mfaEnabled = false;
+    bool privileged = false;
+};
 
 class IAMEngine {
 
-    constructor() {
-        this.identities = new Map();
-    }
+private:
+    unordered_map<string, Identity> identities;
 
-    register(identity) {
-        if (this.identities.has(identity.id)) {
-            throw new SecurityError("Duplicate identity");
+public:
+
+    void registerIdentity(const Identity& identity) {
+        validateString(identity.id, "identity");
+
+        if (identities.count(identity.id)) {
+            throw invalid_argument("Duplicate identity");
         }
 
-        this.identities.set(identity.id, identity);
+        identities.emplace(identity.id, identity);
     }
 
-    authorize(identityId, action, resource, options = {}) {
-        const identity = this.identities.get(identityId);
+    bool authorize(
+        const string& identityId,
+        const string& action,
+        const string& resource,
+        bool requireMFA = true
+    ) const {
 
-        if (!identity || !identity.active) {
-            return {
-                allowed: false,
-                reason: "IDENTITY_INACTIVE_OR_UNKNOWN"
-            };
-        }
+        auto iterator = identities.find(identityId);
 
-        if (options.requireMFA !== false && !identity.mfa) {
-            return {
-                allowed: false,
-                reason: "MFA_REQUIRED"
-            };
-        }
-
-        const allowed = identity.policy.evaluate(action, resource);
-
-        return {
-            allowed,
-            reason: allowed ? "POLICY_ALLOW" : "DEFAULT_OR_EXPLICIT_DENY"
-        };
-    }
-}
-
-// ============================================================
-// KMS AND ENCRYPTION POSTURE
-// ============================================================
-
-class KMSRegistry {
-
-    constructor() {
-        this.keys = new Map();
-    }
-
-    create(alias) {
-        validateString(alias, "key alias");
-
-        if (this.keys.has(alias)) {
-            throw new SecurityError("Key alias already exists");
-        }
-
-        const key = {
-            id: identifier(),
-            alias,
-            algorithm: "AES-256-GCM",
-            enabled: true,
-            version: 1,
-            createdAt: new Date().toISOString()
-        };
-
-        this.keys.set(alias, key);
-
-        return { ...key };
-    }
-
-    rotate(alias) {
-        const key = this.keys.get(alias);
-
-        if (!key || !key.enabled) {
-            throw new SecurityError("Key unavailable for rotation");
-        }
-
-        key.id = identifier();
-        key.version++;
-        key.rotatedAt = new Date().toISOString();
-
-        return { ...key };
-    }
-
-    disable(alias) {
-        const key = this.keys.get(alias);
-
-        if (!key) {
-            throw new SecurityError("Unknown key");
-        }
-
-        key.enabled = false;
-    }
-
-    get(alias) {
-        const key = this.keys.get(alias);
-
-        return key ? { ...key } : null;
-    }
-}
-
-class SecureStorage {
-
-    constructor(kms) {
-        this.kms = kms;
-        this.resources = new Map();
-    }
-
-    provision({ id, environment, owner }) {
-        validateString(id, "resource ID");
-        validateString(owner, "owner");
-
-        if (!CONFIG.environments.includes(environment)) {
-            throw new SecurityError("Invalid environment");
-        }
-
-        if (this.resources.has(id)) {
-            throw new SecurityError("Duplicate storage resource");
-        }
-
-        this.resources.set(id, {
-            id,
-            owner,
-            environment,
-            encrypted: false,
-            keyAlias: null,
-            keyVersion: null,
-            state: "ACTIVE"
-        });
-    }
-
-    enableEncryption(resourceId, keyAlias) {
-        const resource = this.resources.get(resourceId);
-        const key = this.kms.get(keyAlias);
-
-        if (!resource || !key || !key.enabled) {
-            throw new SecurityError("Resource or encryption key unavailable");
-        }
-
-        resource.encrypted = true;
-        resource.keyAlias = keyAlias;
-        resource.keyVersion = key.version;
-        resource.state = "ENCRYPTED";
-    }
-
-    assess(resourceId) {
-        const resource = this.resources.get(resourceId);
-
-        if (!resource) return false;
-
-        const key = this.kms.get(resource.keyAlias);
-
-        return (
-            resource.encrypted &&
-            resource.state === "ENCRYPTED" &&
-            key !== null &&
-            key.enabled
-        );
-    }
-}
-
-// ============================================================
-// NETWORK ISOLATION
-// ============================================================
-
-class NetworkPolicy {
-
-    constructor(name) {
-        validateString(name, "network name");
-
-        this.name = name;
-        this.rules = [];
-    }
-
-    addRule({
-        source,
-        destination,
-        port,
-        protocol = "TCP",
-        effect
-    }) {
-        if (
-            !Number.isInteger(port) ||
-            port < 1 ||
-            port > 65535
-        ) {
-            throw new SecurityError("Invalid port");
-        }
-
-        if (!["TCP", "UDP", "ICMP"].includes(protocol)) {
-            throw new SecurityError("Unsupported protocol");
-        }
-
-        if (!["ALLOW", "DENY"].includes(effect)) {
-            throw new SecurityError("Invalid network effect");
-        }
-
-        this.rules.push(Object.freeze({
-            source,
-            destination,
-            port,
-            protocol,
-            effect
-        }));
-    }
-
-    evaluate(source, destination, port, protocol = "TCP") {
-        const matching = this.rules.filter(rule =>
-            matches(rule.source, source) &&
-            matches(rule.destination, destination) &&
-            rule.port === port &&
-            rule.protocol === protocol
-        );
-
-        if (matching.some(rule => rule.effect === "DENY")) {
+        if (iterator == identities.end()) {
             return false;
         }
 
-        return matching.some(rule => rule.effect === "ALLOW");
-    }
-}
+        const Identity& identity = iterator->second;
 
-// ============================================================
-// EVENT-DRIVEN AUDIT SERVICE
-// ============================================================
-
-class AuditService extends EventEmitter {
-
-    constructor(filePath = CONFIG.auditFile) {
-        super();
-
-        this.filePath = filePath;
-        this.events = [];
-        this.sequence = 0;
-        this.previousHash = "GENESIS";
-    }
-
-    async record({
-        actor,
-        action,
-        resource,
-        outcome,
-        severity = "LOW",
-        details = {}
-    }) {
-        if (!Object.hasOwn(SEVERITY, severity)) {
-            throw new SecurityError("Invalid severity");
+        if (!identity.active) {
+            return false;
         }
 
-        if (this.events.length >= CONFIG.maximumAuditEvents) {
-            throw new SecurityError("Audit event limit reached");
+        if (requireMFA && !identity.mfaEnabled) {
+            return false;
         }
 
-        const payload = {
-            sequence: ++this.sequence,
-            id: identifier(),
-            timestamp: new Date().toISOString(),
+        return identity.policy.authorize(action, resource);
+    }
+
+    const auto& getIdentities() const {
+        return identities;
+    }
+};
+
+// ============================================================
+// KEY MANAGEMENT
+// ============================================================
+
+struct EncryptionKey {
+    string alias;
+    string keyId;
+    bool enabled;
+    unsigned int version;
+};
+
+class KeyManagementService {
+
+private:
+    map<string, EncryptionKey> keys;
+    unsigned long long counter = 1000;
+
+public:
+
+    string createKey(const string& alias) {
+        validateString(alias, "key alias");
+
+        if (keys.count(alias)) {
+            throw invalid_argument("Key already exists");
+        }
+
+        string keyId = "KMS-" + to_string(counter++);
+
+        keys.emplace(
+            alias,
+            EncryptionKey{
+                alias,
+                keyId,
+                true,
+                1
+            }
+        );
+
+        return keyId;
+    }
+
+    void rotateKey(const string& alias) {
+        auto iterator = keys.find(alias);
+
+        if (iterator == keys.end() || !iterator->second.enabled) {
+            throw runtime_error("Key cannot be rotated");
+        }
+
+        iterator->second.keyId = "KMS-" + to_string(counter++);
+        iterator->second.version++;
+    }
+
+    void disableKey(const string& alias) {
+        auto iterator = keys.find(alias);
+
+        if (iterator == keys.end()) {
+            throw invalid_argument("Unknown key");
+        }
+
+        iterator->second.enabled = false;
+    }
+
+    bool enabled(const string& keyId) const {
+        for (const auto& entry : keys) {
+            if (
+                entry.second.keyId == keyId &&
+                entry.second.enabled
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    optional<EncryptionKey> getKey(const string& alias) const {
+        auto iterator = keys.find(alias);
+
+        if (iterator == keys.end()) {
+            return nullopt;
+        }
+
+        return iterator->second;
+    }
+};
+
+// ============================================================
+// CLOUD STORAGE
+// ============================================================
+
+struct StorageResource {
+    string id;
+    string owner;
+    Environment environment;
+    ResourceState state;
+    optional<string> keyId;
+};
+
+class StorageService {
+
+private:
+    KeyManagementService& kms;
+    unordered_map<string, StorageResource> resources;
+
+public:
+
+    explicit StorageService(KeyManagementService& service)
+        : kms(service) {}
+
+    void provision(const StorageResource& resource) {
+        validateString(resource.id, "resource ID");
+
+        if (resources.count(resource.id)) {
+            throw invalid_argument("Duplicate resource");
+        }
+
+        resources.emplace(resource.id, resource);
+    }
+
+    void encrypt(
+        const string& resourceId,
+        const string& keyId
+    ) {
+        auto iterator = resources.find(resourceId);
+
+        if (iterator == resources.end()) {
+            throw invalid_argument("Resource not found");
+        }
+
+        if (!kms.enabled(keyId)) {
+            throw runtime_error("Encryption key unavailable");
+        }
+
+        iterator->second.keyId = keyId;
+        iterator->second.state = ResourceState::ENCRYPTED;
+    }
+
+    bool isSecure(const string& resourceId) const {
+        auto iterator = resources.find(resourceId);
+
+        if (iterator == resources.end()) {
+            return false;
+        }
+
+        const auto& resource = iterator->second;
+
+        return (
+            resource.state == ResourceState::ENCRYPTED &&
+            resource.keyId.has_value() &&
+            kms.enabled(resource.keyId.value())
+        );
+    }
+
+    const auto& getResources() const {
+        return resources;
+    }
+};
+
+// ============================================================
+// NETWORK SECURITY
+// ============================================================
+
+struct NetworkRule {
+    string source;
+    string destination;
+    int port;
+    string protocol;
+    Effect effect;
+};
+
+class NetworkSecurityGroup {
+
+private:
+    string name;
+    vector<NetworkRule> rules;
+
+public:
+
+    explicit NetworkSecurityGroup(string groupName)
+        : name(move(groupName)) {
+
+        validateString(name, "network group");
+    }
+
+    void addRule(const NetworkRule& rule) {
+        if (rule.port < 1 || rule.port > 65535) {
+            throw invalid_argument("Invalid network port");
+        }
+
+        if (
+            rule.protocol != "TCP" &&
+            rule.protocol != "UDP" &&
+            rule.protocol != "ICMP"
+        ) {
+            throw invalid_argument("Invalid protocol");
+        }
+
+        rules.push_back(rule);
+    }
+
+    bool permits(
+        const string& source,
+        const string& destination,
+        int port,
+        const string& protocol
+    ) const {
+
+        bool allowed = false;
+
+        for (const auto& rule : rules) {
+
+            bool sourceMatch = matches(rule.source, source);
+            bool destinationMatch = matches(
+                rule.destination,
+                destination
+            );
+
+            if (
+                sourceMatch &&
+                destinationMatch &&
+                rule.port == port &&
+                rule.protocol == protocol
+            ) {
+
+                if (rule.effect == Effect::DENY) {
+                    return false;
+                }
+
+                allowed = true;
+            }
+        }
+
+        return allowed;
+    }
+
+    size_t ruleCount() const {
+        return rules.size();
+    }
+
+    const string& getName() const {
+        return name;
+    }
+};
+
+// ============================================================
+// AUDIT SYSTEM
+// ============================================================
+
+struct AuditEvent {
+    unsigned long long sequence;
+    string actor;
+    string action;
+    string resource;
+    string result;
+    string eventTime;
+    Severity severity;
+};
+
+class AuditLogger {
+
+private:
+    vector<AuditEvent> events;
+
+public:
+
+    void record(
+        const string& actor,
+        const string& action,
+        const string& resource,
+        const string& result,
+        Severity severity
+    ) {
+        events.push_back({
+            events.size() + 1,
             actor,
             action,
             resource,
-            outcome,
-            severity,
-            details,
-            previousHash: this.previousHash
-        };
-
-        const canonical = JSON.stringify(payload);
-
-        const hash = crypto
-            .createHash("sha256")
-            .update(canonical)
-            .digest("hex");
-
-        const event = Object.freeze({
-            ...payload,
-            hash
+            result,
+            timestamp(),
+            severity
         });
-
-        // Serialize writes so concurrent requests cannot reorder
-        // the hash chain or interleave audit records.
-        await fs.promises.appendFile(
-            this.filePath,
-            JSON.stringify(event) + "\n",
-            { encoding: "utf8", flag: "a", mode: 0o600 }
-        );
-
-        this.events.push(event);
-        this.previousHash = hash;
-
-        this.emit("security-event", event);
-
-        return event;
     }
 
-    verifyIntegrity() {
-        let previous = "GENESIS";
+    void print() const {
+        cout << "\nAUDIT EVENTS\n";
 
-        for (const event of this.events) {
-            const payload = {
-                sequence: event.sequence,
-                id: event.id,
-                timestamp: event.timestamp,
-                actor: event.actor,
-                action: event.action,
-                resource: event.resource,
-                outcome: event.outcome,
-                severity: event.severity,
-                details: event.details,
-                previousHash: event.previousHash
-            };
-
-            if (event.previousHash !== previous) {
-                return false;
-            }
-
-            const expected = crypto
-                .createHash("sha256")
-                .update(JSON.stringify(payload))
-                .digest("hex");
-
-            if (expected !== event.hash) {
-                return false;
-            }
-
-            previous = event.hash;
+        for (const auto& event : events) {
+            cout
+                << event.sequence << " | "
+                << event.eventTime << " | "
+                << event.actor << " | "
+                << event.action << " | "
+                << event.resource << " | "
+                << event.result << " | "
+                << toString(event.severity)
+                << '\n';
         }
-
-        return true;
     }
-}
+
+    size_t size() const {
+        return events.size();
+    }
+};
 
 // ============================================================
-// SECURITY POSTURE ENGINE
+// SECURITY FINDINGS
 // ============================================================
+
+struct SecurityFinding {
+    string category;
+    string resource;
+    string description;
+    Severity severity;
+};
 
 class SecurityPostureEngine {
 
-    constructor({ iam, kms, storage, network }) {
-        this.iam = iam;
-        this.kms = kms;
-        this.storage = storage;
-        this.network = network;
-    }
+public:
 
-    evaluate() {
-        const findings = [];
+    vector<SecurityFinding> evaluate(
+        const IAMEngine& iam,
+        const StorageService& storage,
+        const KeyManagementService& kms,
+        const NetworkSecurityGroup& network
+    ) const {
 
-        for (const identity of this.iam.identities.values()) {
-            if (identity.active && !identity.mfa) {
-                findings.push({
-                    category: "IDENTITY",
-                    severity: "HIGH",
-                    resource: identity.id,
-                    description: "MFA is not enabled"
+        vector<SecurityFinding> findings;
+
+        for (const auto& entry : iam.getIdentities()) {
+            const auto& identity = entry.second;
+
+            if (identity.active && !identity.mfaEnabled) {
+                findings.push_back({
+                    "IAM",
+                    identity.id,
+                    "Active identity lacks MFA",
+                    Severity::HIGH
                 });
             }
         }
 
-        for (const resource of this.storage.resources.values()) {
-            if (!this.storage.assess(resource.id)) {
-                findings.push({
-                    category: "ENCRYPTION",
-                    severity: "CRITICAL",
-                    resource: resource.id,
-                    description: "Storage encryption is missing or invalid"
+        for (const auto& entry : storage.getResources()) {
+            if (!storage.isSecure(entry.first)) {
+                findings.push_back({
+                    "ENCRYPTION",
+                    entry.first,
+                    "Storage encryption is missing or invalid",
+                    Severity::CRITICAL
                 });
             }
         }
 
-        for (const [alias, key] of this.kms.keys) {
-            if (!key.enabled) {
-                findings.push({
-                    category: "KEY_MANAGEMENT",
-                    severity: "HIGH",
-                    resource: alias,
-                    description: "Encryption key is disabled"
-                });
-            }
-        }
-
-        if (this.network.rules.length === 0) {
-            findings.push({
-                category: "NETWORK",
-                severity: "HIGH",
-                resource: this.network.name,
-                description: "Network policy has no explicit rules"
+        if (network.ruleCount() == 0) {
+            findings.push_back({
+                "NETWORK",
+                network.getName(),
+                "No explicit network rules",
+                Severity::HIGH
             });
         }
 
-        return {
-            status: findings.length === 0 ? "COMPLIANT" : "NON_COMPLIANT",
-            evaluatedAt: new Date().toISOString(),
-            findingCount: findings.length,
-            findings
-        };
+        return findings;
     }
-}
+};
 
 // ============================================================
-// SECURITY APPLICATION
+// CLOUD GOVERNANCE APPLICATION
 // ============================================================
 
-class CloudSecurityApplication {
+class CloudSecurityPlatform {
 
-    constructor() {
-        this.iam = new IAMEngine();
-        this.kms = new KMSRegistry();
-        this.storage = new SecureStorage(this.kms);
-        this.network = new NetworkPolicy("production-vpc");
+private:
+    KeyManagementService kms;
+    StorageService storage;
+    IAMEngine iam;
+    NetworkSecurityGroup network;
+    AuditLogger audit;
+    SecurityPostureEngine posture;
 
-        this.audit = new AuditService();
+public:
 
-        this.audit.on("security-event", event => {
-            if (SEVERITY[event.severity] >= SEVERITY.HIGH) {
-                process.stderr.write(
-                    `[SECURITY ALERT] ${event.action}: ${event.outcome}\n`
-                );
-            }
-        });
+    CloudSecurityPlatform()
+        : storage(kms),
+          network("production-vpc") {}
 
-        this.posture = new SecurityPostureEngine(this);
+    KeyManagementService& keyManager() {
+        return kms;
     }
 
-    async execute(identity, action, resource) {
-        const result = this.iam.authorize(
+    StorageService& storageService() {
+        return storage;
+    }
+
+    IAMEngine& iamEngine() {
+        return iam;
+    }
+
+    NetworkSecurityGroup& networkGroup() {
+        return network;
+    }
+
+    bool execute(
+        const string& identity,
+        const string& action,
+        const string& resource
+    ) {
+
+        bool permitted = iam.authorize(
             identity,
             action,
             resource
         );
 
-        await this.audit.record({
-            actor: identity,
+        audit.record(
+            identity,
             action,
             resource,
-            outcome: result.allowed ? "ALLOWED" : "DENIED",
-            severity: result.allowed ? "LOW" : "HIGH",
-            details: { reason: result.reason }
-        });
-
-        return result;
-    }
-
-    report() {
-        return this.posture.evaluate();
-    }
-}
-
-// ============================================================
-// TESTING
-// ============================================================
-
-async function runTests() {
-    const app = new CloudSecurityApplication();
-
-    const policy = new IAMPolicy("application-reader");
-
-    policy.addStatement({
-        effect: "ALLOW",
-        actions: ["storage:read"],
-        resources: ["bucket:production/*"]
-    });
-
-    policy.addStatement({
-        effect: "DENY",
-        actions: ["storage:delete"],
-        resources: ["*"]
-    });
-
-    app.iam.register(new Identity({
-        id: "application-identity",
-        policy,
-        mfa: true
-    }));
-
-    console.assert(
-        app.iam.authorize(
-            "application-identity",
-            "storage:read",
-            "bucket:production/logs"
-        ).allowed
-    );
-
-    console.assert(
-        !app.iam.authorize(
-            "application-identity",
-            "storage:delete",
-            "bucket:production/logs"
-        ).allowed
-    );
-
-    console.assert(
-        !app.iam.authorize(
-            "unknown",
-            "storage:read",
-            "bucket:production/logs"
-        ).allowed
-    );
-
-    const key = app.kms.create("production-key");
-
-    app.storage.provision({
-        id: "database-backup",
-        environment: "production",
-        owner: "database-team"
-    });
-
-    app.storage.enableEncryption(
-        "database-backup",
-        key.alias
-    );
-
-    console.assert(app.storage.assess("database-backup"));
-
-    app.network.addRule({
-        source: "application-subnet",
-        destination: "database-subnet",
-        port: 5432,
-        protocol: "TCP",
-        effect: "ALLOW"
-    });
-
-    app.network.addRule({
-        source: "internet",
-        destination: "database-subnet",
-        port: 5432,
-        protocol: "TCP",
-        effect: "DENY"
-    });
-
-    console.assert(
-        app.network.evaluate(
-            "application-subnet",
-            "database-subnet",
-            5432
-        )
-    );
-
-    console.assert(
-        !app.network.evaluate(
-            "internet",
-            "database-subnet",
-            5432
-        )
-    );
-
-    await app.execute(
-        "application-identity",
-        "storage:read",
-        "bucket:production/logs"
-    );
-
-    await app.execute(
-        "application-identity",
-        "storage:delete",
-        "bucket:production/logs"
-    );
-
-    console.assert(app.audit.verifyIntegrity());
-
-    console.log("All cloud security tests passed.");
-
-    return app;
-}
-
-// ============================================================
-// EXECUTION
-// ============================================================
-
-async function main() {
-    try {
-        const app = await runTests();
-
-        console.log("\nSECURITY POSTURE REPORT");
-
-        console.log(
-            JSON.stringify(app.report(), null, 2)
+            permitted ? "ALLOWED" : "DENIED",
+            permitted ? Severity::LOW : Severity::HIGH
         );
 
-        console.log("\nAUDIT INTEGRITY");
-
-        console.log(
-            app.audit.verifyIntegrity() ? "VALID" : "INVALID"
-        );
-
-    } catch (error) {
-        console.error("Cloud security failure:", error.message);
-        process.exitCode = 1;
+        return permitted;
     }
-}
 
-if (require.main === module) {
-    main();
-}
+    vector<SecurityFinding> evaluate() const {
+        return posture.evaluate(iam, storage, kms, network);
+    }
 
-module.exports = {
-    IAMPolicy,
-    IAMEngine,
-    Identity,
-    KMSRegistry,
-    SecureStorage,
-    NetworkPolicy,
-    AuditService,
-    SecurityPostureEngine,
-    CloudSecurityApplication
+    void printReport() const {
+        auto findings = evaluate();
+
+        cout << "\nCLOUD SECURITY REPORT\n";
+
+        cout << "Identities: "
+             << iam.getIdentities().size() << '\n';
+
+        cout << "Storage resources: "
+             << storage.getResources().size() << '\n';
+
+        cout << "Audit events: "
+             << audit.size() << '\n';
+
+        cout << "Findings: "
+             << findings.size() << '\n';
+
+        for (const auto& finding : findings) {
+            cout
+                << "[" << toString(finding.severity) << "] "
+                << finding.category << " | "
+                << finding.resource << " | "
+                << finding.description << '\n';
+        }
+
+        cout << "Posture: "
+             << (findings.empty() ? "COMPLIANT" : "ACTION REQUIRED")
+             << '\n';
+
+        audit.print();
+    }
 };
+
+// ============================================================
+// TESTS
+// ============================================================
+
+void runTests() {
+
+    CloudSecurityPlatform platform;
+
+    IAMPolicy policy;
+
+    policy.addStatement({
+        Effect::ALLOW,
+        {"storage:read"},
+        {"bucket:production/*"}
+    });
+
+    policy.addStatement({
+        Effect::DENY,
+        {"storage:delete"},
+        {"*"}
+    });
+
+    Identity identity{
+        "service-account-01",
+        policy,
+        true,
+        true,
+        false
+    };
+
+    platform.iamEngine().registerIdentity(identity);
+
+    if (!platform.execute(
+        "service-account-01",
+        "storage:read",
+        "bucket:production/reports"
+    )) {
+        throw runtime_error("IAM allow test failed");
+    }
+
+    if (platform.execute(
+        "service-account-01",
+        "storage:delete",
+        "bucket:production/reports"
+    )) {
+        throw runtime_error("Explicit deny test failed");
+    }
+
+    if (platform.execute(
+        "service-account-01",
+        "storage:admin",
+        "bucket:production/reports"
+    )) {
+        throw runtime_error("Default deny test failed");
+    }
+
+    string keyId = platform.keyManager().createKey(
+        "production-key"
+    );
+
+    platform.storageService().provision({
+        "database-backup",
+        "database-team",
+        Environment::PRODUCTION,
+        ResourceState::ACTIVE,
+        nullopt
+    });
+
+    platform.storageService().encrypt(
+        "database-backup",
+        keyId
+    );
+
+    if (!platform.storageService().isSecure("database-backup")) {
+        throw runtime_error("Encryption test failed");
+    }
+
+    platform.networkGroup().addRule({
+        "application-subnet",
+        "database-subnet",
+        5432,
+        "TCP",
+        Effect::ALLOW
+    });
+
+    platform.networkGroup().addRule({
+        "internet",
+        "database-subnet",
+        5432,
+        "TCP",
+        Effect::DENY
+    });
+
+    if (!platform.networkGroup().permits(
+        "application-subnet",
+        "database-subnet",
+        5432,
+        "TCP"
+    )) {
+        throw runtime_error("Network allow test failed");
+    }
+
+    if (platform.networkGroup().permits(
+        "internet",
+        "database-subnet",
+        5432,
+        "TCP"
+    )) {
+        throw runtime_error("Network deny test failed");
+    }
+
+    cout << "All C++17 security tests passed.\n";
+
+    platform.printReport();
+}
+
+// ============================================================
+// MAIN
+// ============================================================
+
+int main() {
+
+    try {
+        runTests();
+        return 0;
+    }
+    catch (const exception& error) {
+        cerr << "Security engine error: "
+             << error.what() << '\n';
+
+        return 1;
+    }
+}
