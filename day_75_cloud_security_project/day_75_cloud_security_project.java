@@ -1,837 +1,960 @@
-/*
- * CLOUD SECURITY GOVERNANCE ENGINE
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
+
+/**
+ * SECURE CLOUD ENVIRONMENT
  *
- * C++17
+ * Java 17 enterprise governance implementation.
  *
- * Implements:
- * - IAM authorization with explicit deny precedence
- * - Least-privilege policy evaluation
- * - Encryption posture and key lifecycle
+ * Components:
+ * - IAM identity and policy management
+ * - Role-based access decisions
+ * - Encryption key lifecycle
+ * - Storage security
  * - Network segmentation
- * - Security audit records
- * - Centralized security findings
- * - Merge-independent cloud compliance evaluation
+ * - Audit event management
+ * - Security posture assessment
  *
- * Cryptographic encryption is represented through managed key
- * metadata. Production encryption must use a managed KMS/HSM.
+ * Encryption operations are delegated to a conceptual managed KMS.
+ * No homemade cryptographic algorithm is implemented.
  */
 
-#include <algorithm>
-#include <ctime>
-#include <iomanip>
-#include <iostream>
-#include <map>
-#include <optional>
-#include <set>
-#include <sstream>
-#include <stdexcept>
-#include <string>
-#include <unordered_map>
-#include <vector>
+public class CloudSecurityEnterprise {
 
-using namespace std;
+    // ========================================================
+    // ENUMERATIONS
+    // ========================================================
 
-// ============================================================
-// ENUMERATIONS
-// ============================================================
-
-enum class Effect {
-    ALLOW,
-    DENY
-};
-
-enum class Severity {
-    LOW,
-    MEDIUM,
-    HIGH,
-    CRITICAL
-};
-
-enum class Environment {
-    DEVELOPMENT,
-    STAGING,
-    PRODUCTION
-};
-
-enum class ResourceState {
-    ACTIVE,
-    ENCRYPTED,
-    BLOCKED
-};
-
-string toString(Severity severity) {
-    switch (severity) {
-        case Severity::LOW: return "LOW";
-        case Severity::MEDIUM: return "MEDIUM";
-        case Severity::HIGH: return "HIGH";
-        case Severity::CRITICAL: return "CRITICAL";
+    enum Effect {
+        ALLOW,
+        DENY
     }
 
-    return "UNKNOWN";
-}
-
-string toString(Effect effect) {
-    return effect == Effect::ALLOW ? "ALLOW" : "DENY";
-}
-
-// ============================================================
-// VALIDATION
-// ============================================================
-
-void validateString(const string& value, const string& field) {
-    if (value.empty() || value.size() > 128) {
-        throw invalid_argument("Invalid " + field);
-    }
-}
-
-bool matches(const string& pattern, const string& value) {
-    if (pattern == "*") return true;
-
-    if (!pattern.empty() && pattern.back() == '*') {
-        return value.compare(
-            0,
-            pattern.size() - 1,
-            pattern.substr(0, pattern.size() - 1)
-        ) == 0;
+    enum IdentityStatus {
+        ACTIVE,
+        SUSPENDED,
+        DISABLED
     }
 
-    return pattern == value;
-}
+    enum KeyStatus {
+        ENABLED,
+        DISABLED
+    }
 
-string timestamp() {
-    time_t now = time(nullptr);
-    tm utc{};
+    enum ResourceStatus {
+        ACTIVE,
+        ENCRYPTED,
+        BLOCKED
+    }
 
-#ifdef _WIN32
-    gmtime_s(&utc, &now);
-#else
-    gmtime_r(&now, &utc);
-#endif
+    enum Environment {
+        DEVELOPMENT,
+        STAGING,
+        PRODUCTION
+    }
 
-    ostringstream output;
+    enum Severity {
+        LOW,
+        MEDIUM,
+        HIGH,
+        CRITICAL
+    }
 
-    output << put_time(&utc, "%Y-%m-%dT%H:%M:%SZ");
+    // ========================================================
+    // EXCEPTIONS
+    // ========================================================
 
-    return output.str();
-}
+    static class SecurityException extends RuntimeException {
+        SecurityException(String message) {
+            super(message);
+        }
+    }
 
-// ============================================================
-// IAM POLICY
-// ============================================================
+    static class AuthorizationException extends SecurityException {
+        AuthorizationException(String message) {
+            super(message);
+        }
+    }
 
-struct PolicyStatement {
-    Effect effect;
-    set<string> actions;
-    set<string> resources;
-};
+    static class ValidationException extends SecurityException {
+        ValidationException(String message) {
+            super(message);
+        }
+    }
 
-class IAMPolicy {
+    // ========================================================
+    // VALIDATION UTILITIES
+    // ========================================================
 
-private:
-    vector<PolicyStatement> statements;
-
-public:
-
-    void addStatement(const PolicyStatement& statement) {
+    static void requireText(String value, String field) {
         if (
-            statement.actions.empty() ||
-            statement.resources.empty()
+            value == null ||
+            value.isBlank() ||
+            value.length() > 128
         ) {
-            throw invalid_argument("Empty IAM statement");
+            throw new ValidationException(
+                "Invalid " + field
+            );
+        }
+    }
+
+    static boolean matches(String pattern, String value) {
+        if (pattern.equals("*")) {
+            return true;
         }
 
-        statements.push_back(statement);
+        if (pattern.endsWith("*")) {
+            return value.startsWith(
+                pattern.substring(0, pattern.length() - 1)
+            );
+        }
+
+        return pattern.equals(value);
     }
 
-    bool authorize(
-        const string& action,
-        const string& resource
-    ) const {
+    // ========================================================
+    // IAM POLICY DOMAIN
+    // ========================================================
 
-        bool allowed = false;
+    record PolicyStatement(
+        Effect effect,
+        Set<String> actions,
+        Set<String> resources
+    ) {
+        PolicyStatement {
+            Objects.requireNonNull(effect);
 
-        for (const auto& statement : statements) {
-
-            bool actionMatch = any_of(
-                statement.actions.begin(),
-                statement.actions.end(),
-                [&](const string& pattern) {
-                    return matches(pattern, action);
-                }
-            );
-
-            bool resourceMatch = any_of(
-                statement.resources.begin(),
-                statement.resources.end(),
-                [&](const string& pattern) {
-                    return matches(pattern, resource);
-                }
-            );
-
-            if (!actionMatch || !resourceMatch) {
-                continue;
+            if (
+                actions == null ||
+                resources == null ||
+                actions.isEmpty() ||
+                resources.isEmpty()
+            ) {
+                throw new ValidationException(
+                    "IAM actions and resources are required"
+                );
             }
 
-            if (statement.effect == Effect::DENY) {
+            actions = Set.copyOf(actions);
+            resources = Set.copyOf(resources);
+        }
+    }
+
+    static final class IAMPolicy {
+
+        private final String name;
+        private final List<PolicyStatement> statements =
+            new ArrayList<>();
+
+        IAMPolicy(
+            String name,
+            List<PolicyStatement> statements
+        ) {
+            requireText(name, "policy name");
+
+            this.name = name;
+
+            if (statements != null) {
+                this.statements.addAll(statements);
+            }
+        }
+
+        void addStatement(PolicyStatement statement) {
+            statements.add(
+                Objects.requireNonNull(statement)
+            );
+        }
+
+        boolean permits(String action, String resource) {
+
+            boolean allowed = false;
+
+            for (PolicyStatement statement : statements) {
+
+                boolean actionMatch = statement.actions()
+                    .stream()
+                    .anyMatch(pattern -> matches(pattern, action));
+
+                boolean resourceMatch = statement.resources()
+                    .stream()
+                    .anyMatch(pattern -> matches(pattern, resource));
+
+                if (!actionMatch || !resourceMatch) {
+                    continue;
+                }
+
+                if (statement.effect() == Effect.DENY) {
+                    return false;
+                }
+
+                if (statement.effect() == Effect.ALLOW) {
+                    allowed = true;
+                }
+            }
+
+            return allowed;
+        }
+
+        String name() {
+            return name;
+        }
+    }
+
+    // ========================================================
+    // IDENTITY MANAGEMENT
+    // ========================================================
+
+    static final class Identity {
+
+        private final String id;
+        private final IAMPolicy policy;
+        private IdentityStatus status;
+        private boolean mfaEnabled;
+        private final Set<String> permissionsBoundaries;
+
+        Identity(
+            String id,
+            IAMPolicy policy,
+            IdentityStatus status,
+            boolean mfaEnabled
+        ) {
+            requireText(id, "identity ID");
+
+            this.id = id;
+            this.policy = Objects.requireNonNull(policy);
+            this.status = Objects.requireNonNull(status);
+            this.mfaEnabled = mfaEnabled;
+            this.permissionsBoundaries = new HashSet<>();
+        }
+
+        void suspend() {
+            status = IdentityStatus.SUSPENDED;
+        }
+
+        void enableMFA() {
+            mfaEnabled = true;
+        }
+
+        void addBoundary(String resourcePattern) {
+            requireText(resourcePattern, "boundary");
+
+            permissionsBoundaries.add(resourcePattern);
+        }
+
+        boolean withinBoundary(String resource) {
+            return permissionsBoundaries.isEmpty() ||
+                permissionsBoundaries.stream()
+                    .anyMatch(pattern -> matches(pattern, resource));
+        }
+    }
+
+    static final class IAMService {
+
+        private final Map<String, Identity> identities =
+            new ConcurrentHashMap<>();
+
+        void register(Identity identity) {
+            Identity previous = identities.putIfAbsent(
+                identity.id,
+                identity
+            );
+
+            if (previous != null) {
+                throw new ValidationException(
+                    "Identity already registered"
+                );
+            }
+        }
+
+        boolean authorize(
+            String identityId,
+            String action,
+            String resource,
+            boolean requireMFA
+        ) {
+
+            Identity identity = identities.get(identityId);
+
+            if (
+                identity == null ||
+                identity.status != IdentityStatus.ACTIVE
+            ) {
                 return false;
             }
 
-            if (statement.effect == Effect::ALLOW) {
-                allowed = true;
+            if (requireMFA && !identity.mfaEnabled) {
+                return false;
             }
+
+            if (!identity.withinBoundary(resource)) {
+                return false;
+            }
+
+            return identity.policy.permits(action, resource);
         }
 
-        return allowed;
-    }
-};
-
-struct Identity {
-    string id;
-    IAMPolicy policy;
-    bool active = true;
-    bool mfaEnabled = false;
-    bool privileged = false;
-};
-
-class IAMEngine {
-
-private:
-    unordered_map<string, Identity> identities;
-
-public:
-
-    void registerIdentity(const Identity& identity) {
-        validateString(identity.id, "identity");
-
-        if (identities.count(identity.id)) {
-            throw invalid_argument("Duplicate identity");
+        List<Identity> identities() {
+            return List.copyOf(identities.values());
         }
-
-        identities.emplace(identity.id, identity);
     }
 
-    bool authorize(
-        const string& identityId,
-        const string& action,
-        const string& resource,
-        bool requireMFA = true
-    ) const {
+    // ========================================================
+    // KEY MANAGEMENT
+    // ========================================================
 
-        auto iterator = identities.find(identityId);
+    record ManagedKey(
+        String alias,
+        String keyId,
+        String algorithm,
+        int version,
+        KeyStatus status,
+        Instant createdAt
+    ) {}
 
-        if (iterator == identities.end()) {
-            return false;
-        }
+    static final class KeyManagementService {
 
-        const Identity& identity = iterator->second;
+        private final Map<String, ManagedKey> keys =
+            new ConcurrentHashMap<>();
 
-        if (!identity.active) {
-            return false;
-        }
+        private final AtomicLong versionCounter =
+            new AtomicLong(1000);
 
-        if (requireMFA && !identity.mfaEnabled) {
-            return false;
-        }
+        ManagedKey createKey(String alias) {
+            requireText(alias, "key alias");
 
-        return identity.policy.authorize(action, resource);
-    }
-
-    const auto& getIdentities() const {
-        return identities;
-    }
-};
-
-// ============================================================
-// KEY MANAGEMENT
-// ============================================================
-
-struct EncryptionKey {
-    string alias;
-    string keyId;
-    bool enabled;
-    unsigned int version;
-};
-
-class KeyManagementService {
-
-private:
-    map<string, EncryptionKey> keys;
-    unsigned long long counter = 1000;
-
-public:
-
-    string createKey(const string& alias) {
-        validateString(alias, "key alias");
-
-        if (keys.count(alias)) {
-            throw invalid_argument("Key already exists");
-        }
-
-        string keyId = "KMS-" + to_string(counter++);
-
-        keys.emplace(
-            alias,
-            EncryptionKey{
+            ManagedKey key = new ManagedKey(
                 alias,
-                keyId,
-                true,
-                1
-            }
-        );
-
-        return keyId;
-    }
-
-    void rotateKey(const string& alias) {
-        auto iterator = keys.find(alias);
-
-        if (iterator == keys.end() || !iterator->second.enabled) {
-            throw runtime_error("Key cannot be rotated");
-        }
-
-        iterator->second.keyId = "KMS-" + to_string(counter++);
-        iterator->second.version++;
-    }
-
-    void disableKey(const string& alias) {
-        auto iterator = keys.find(alias);
-
-        if (iterator == keys.end()) {
-            throw invalid_argument("Unknown key");
-        }
-
-        iterator->second.enabled = false;
-    }
-
-    bool enabled(const string& keyId) const {
-        for (const auto& entry : keys) {
-            if (
-                entry.second.keyId == keyId &&
-                entry.second.enabled
-            ) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    optional<EncryptionKey> getKey(const string& alias) const {
-        auto iterator = keys.find(alias);
-
-        if (iterator == keys.end()) {
-            return nullopt;
-        }
-
-        return iterator->second;
-    }
-};
-
-// ============================================================
-// CLOUD STORAGE
-// ============================================================
-
-struct StorageResource {
-    string id;
-    string owner;
-    Environment environment;
-    ResourceState state;
-    optional<string> keyId;
-};
-
-class StorageService {
-
-private:
-    KeyManagementService& kms;
-    unordered_map<string, StorageResource> resources;
-
-public:
-
-    explicit StorageService(KeyManagementService& service)
-        : kms(service) {}
-
-    void provision(const StorageResource& resource) {
-        validateString(resource.id, "resource ID");
-
-        if (resources.count(resource.id)) {
-            throw invalid_argument("Duplicate resource");
-        }
-
-        resources.emplace(resource.id, resource);
-    }
-
-    void encrypt(
-        const string& resourceId,
-        const string& keyId
-    ) {
-        auto iterator = resources.find(resourceId);
-
-        if (iterator == resources.end()) {
-            throw invalid_argument("Resource not found");
-        }
-
-        if (!kms.enabled(keyId)) {
-            throw runtime_error("Encryption key unavailable");
-        }
-
-        iterator->second.keyId = keyId;
-        iterator->second.state = ResourceState::ENCRYPTED;
-    }
-
-    bool isSecure(const string& resourceId) const {
-        auto iterator = resources.find(resourceId);
-
-        if (iterator == resources.end()) {
-            return false;
-        }
-
-        const auto& resource = iterator->second;
-
-        return (
-            resource.state == ResourceState::ENCRYPTED &&
-            resource.keyId.has_value() &&
-            kms.enabled(resource.keyId.value())
-        );
-    }
-
-    const auto& getResources() const {
-        return resources;
-    }
-};
-
-// ============================================================
-// NETWORK SECURITY
-// ============================================================
-
-struct NetworkRule {
-    string source;
-    string destination;
-    int port;
-    string protocol;
-    Effect effect;
-};
-
-class NetworkSecurityGroup {
-
-private:
-    string name;
-    vector<NetworkRule> rules;
-
-public:
-
-    explicit NetworkSecurityGroup(string groupName)
-        : name(move(groupName)) {
-
-        validateString(name, "network group");
-    }
-
-    void addRule(const NetworkRule& rule) {
-        if (rule.port < 1 || rule.port > 65535) {
-            throw invalid_argument("Invalid network port");
-        }
-
-        if (
-            rule.protocol != "TCP" &&
-            rule.protocol != "UDP" &&
-            rule.protocol != "ICMP"
-        ) {
-            throw invalid_argument("Invalid protocol");
-        }
-
-        rules.push_back(rule);
-    }
-
-    bool permits(
-        const string& source,
-        const string& destination,
-        int port,
-        const string& protocol
-    ) const {
-
-        bool allowed = false;
-
-        for (const auto& rule : rules) {
-
-            bool sourceMatch = matches(rule.source, source);
-            bool destinationMatch = matches(
-                rule.destination,
-                destination
+                UUID.randomUUID().toString(),
+                "AES-256-GCM",
+                1,
+                KeyStatus.ENABLED,
+                Instant.now()
             );
 
-            if (
-                sourceMatch &&
-                destinationMatch &&
-                rule.port == port &&
-                rule.protocol == protocol
-            ) {
+            if (keys.putIfAbsent(alias, key) != null) {
+                throw new ValidationException(
+                    "Duplicate key alias"
+                );
+            }
 
-                if (rule.effect == Effect::DENY) {
+            return key;
+        }
+
+        ManagedKey rotate(String alias) {
+            ManagedKey current = keys.get(alias);
+
+            if (
+                current == null ||
+                current.status() != KeyStatus.ENABLED
+            ) {
+                throw new SecurityException(
+                    "Key unavailable for rotation"
+                );
+            }
+
+            ManagedKey rotated = new ManagedKey(
+                alias,
+                UUID.randomUUID().toString(),
+                current.algorithm(),
+                (int) versionCounter.incrementAndGet(),
+                KeyStatus.ENABLED,
+                Instant.now()
+            );
+
+            keys.put(alias, rotated);
+
+            return rotated;
+        }
+
+        void disable(String alias) {
+            ManagedKey current = keys.get(alias);
+
+            if (current == null) {
+                throw new ValidationException("Unknown key");
+            }
+
+            keys.put(alias, new ManagedKey(
+                current.alias(),
+                current.keyId(),
+                current.algorithm(),
+                current.version(),
+                KeyStatus.DISABLED,
+                current.createdAt()
+            ));
+        }
+
+        Optional<ManagedKey> get(String alias) {
+            return Optional.ofNullable(keys.get(alias));
+        }
+
+        boolean isEnabled(String keyId) {
+            return keys.values().stream().anyMatch(key ->
+                key.keyId().equals(keyId) &&
+                key.status() == KeyStatus.ENABLED
+            );
+        }
+    }
+
+    // ========================================================
+    // CLOUD STORAGE
+    // ========================================================
+
+    record EncryptionMetadata(
+        String keyId,
+        String algorithm,
+        Instant encryptedAt
+    ) {}
+
+    static final class StorageResource {
+
+        private final String id;
+        private final String owner;
+        private final Environment environment;
+
+        private ResourceStatus status;
+        private EncryptionMetadata encryption;
+
+        StorageResource(
+            String id,
+            String owner,
+            Environment environment
+        ) {
+            requireText(id, "resource ID");
+            requireText(owner, "owner");
+
+            this.id = id;
+            this.owner = owner;
+            this.environment = Objects.requireNonNull(environment);
+            this.status = ResourceStatus.ACTIVE;
+        }
+    }
+
+    static final class StorageService {
+
+        private final Map<String, StorageResource> resources =
+            new ConcurrentHashMap<>();
+
+        private final KeyManagementService kms;
+
+        StorageService(KeyManagementService kms) {
+            this.kms = kms;
+        }
+
+        void provision(StorageResource resource) {
+            if (resources.putIfAbsent(
+                resource.id,
+                resource
+            ) != null) {
+                throw new ValidationException(
+                    "Resource already exists"
+                );
+            }
+        }
+
+        void encrypt(String resourceId, String keyId) {
+            StorageResource resource = resources.get(resourceId);
+
+            if (resource == null) {
+                throw new ValidationException(
+                    "Storage resource not found"
+                );
+            }
+
+            if (!kms.isEnabled(keyId)) {
+                throw new SecurityException(
+                    "Encryption key unavailable"
+                );
+            }
+
+            resource.encryption = new EncryptionMetadata(
+                keyId,
+                "AES-256-GCM",
+                Instant.now()
+            );
+
+            resource.status = ResourceStatus.ENCRYPTED;
+        }
+
+        boolean isSecure(String resourceId) {
+            StorageResource resource = resources.get(resourceId);
+
+            return resource != null &&
+                resource.status == ResourceStatus.ENCRYPTED &&
+                resource.encryption != null &&
+                kms.isEnabled(resource.encryption.keyId());
+        }
+
+        List<StorageResource> resources() {
+            return List.copyOf(resources.values());
+        }
+    }
+
+    // ========================================================
+    // NETWORK ISOLATION
+    // ========================================================
+
+    record NetworkRule(
+        String source,
+        String destination,
+        int port,
+        String protocol,
+        Effect effect
+    ) {
+        NetworkRule {
+            requireText(source, "source");
+            requireText(destination, "destination");
+
+            if (port < 1 || port > 65535) {
+                throw new ValidationException(
+                    "Invalid network port"
+                );
+            }
+
+            if (!Set.of("TCP", "UDP", "ICMP").contains(protocol)) {
+                throw new ValidationException(
+                    "Unsupported network protocol"
+                );
+            }
+
+            Objects.requireNonNull(effect);
+        }
+    }
+
+    static final class NetworkSecurityGroup {
+
+        private final String name;
+        private final List<NetworkRule> rules =
+            new ArrayList<>();
+
+        NetworkSecurityGroup(String name) {
+            requireText(name, "network group");
+            this.name = name;
+        }
+
+        synchronized void addRule(NetworkRule rule) {
+            rules.add(rule);
+        }
+
+        synchronized boolean permits(
+            String source,
+            String destination,
+            int port,
+            String protocol
+        ) {
+
+            boolean allowed = false;
+
+            for (NetworkRule rule : rules) {
+
+                if (
+                    !matches(rule.source(), source) ||
+                    !matches(rule.destination(), destination) ||
+                    rule.port() != port ||
+                    !rule.protocol().equals(protocol)
+                ) {
+                    continue;
+                }
+
+                if (rule.effect() == Effect.DENY) {
                     return false;
                 }
 
                 allowed = true;
             }
+
+            return allowed;
         }
 
-        return allowed;
+        synchronized int ruleCount() {
+            return rules.size();
+        }
+
+        String name() {
+            return name;
+        }
     }
 
-    size_t ruleCount() const {
-        return rules.size();
-    }
+    // ========================================================
+    // AUDIT DOMAIN
+    // ========================================================
 
-    const string& getName() const {
-        return name;
-    }
-};
-
-// ============================================================
-// AUDIT SYSTEM
-// ============================================================
-
-struct AuditEvent {
-    unsigned long long sequence;
-    string actor;
-    string action;
-    string resource;
-    string result;
-    string eventTime;
-    Severity severity;
-};
-
-class AuditLogger {
-
-private:
-    vector<AuditEvent> events;
-
-public:
-
-    void record(
-        const string& actor,
-        const string& action,
-        const string& resource,
-        const string& result,
+    record AuditEvent(
+        long sequence,
+        String eventId,
+        Instant timestamp,
+        String actor,
+        String action,
+        String resource,
+        String outcome,
         Severity severity
-    ) {
-        events.push_back({
-            events.size() + 1,
-            actor,
-            action,
-            resource,
-            result,
-            timestamp(),
-            severity
-        });
-    }
+    ) {}
 
-    void print() const {
-        cout << "\nAUDIT EVENTS\n";
+    static final class AuditService {
 
-        for (const auto& event : events) {
-            cout
-                << event.sequence << " | "
-                << event.eventTime << " | "
-                << event.actor << " | "
-                << event.action << " | "
-                << event.resource << " | "
-                << event.result << " | "
-                << toString(event.severity)
-                << '\n';
+        private final List<AuditEvent> events =
+            Collections.synchronizedList(new ArrayList<>());
+
+        private final AtomicLong sequence = new AtomicLong();
+
+        AuditEvent record(
+            String actor,
+            String action,
+            String resource,
+            String outcome,
+            Severity severity
+        ) {
+
+            AuditEvent event = new AuditEvent(
+                sequence.incrementAndGet(),
+                UUID.randomUUID().toString(),
+                Instant.now(),
+                actor,
+                action,
+                resource,
+                outcome,
+                severity
+            );
+
+            events.add(event);
+
+            return event;
         }
-    }
 
-    size_t size() const {
-        return events.size();
-    }
-};
-
-// ============================================================
-// SECURITY FINDINGS
-// ============================================================
-
-struct SecurityFinding {
-    string category;
-    string resource;
-    string description;
-    Severity severity;
-};
-
-class SecurityPostureEngine {
-
-public:
-
-    vector<SecurityFinding> evaluate(
-        const IAMEngine& iam,
-        const StorageService& storage,
-        const KeyManagementService& kms,
-        const NetworkSecurityGroup& network
-    ) const {
-
-        vector<SecurityFinding> findings;
-
-        for (const auto& entry : iam.getIdentities()) {
-            const auto& identity = entry.second;
-
-            if (identity.active && !identity.mfaEnabled) {
-                findings.push_back({
-                    "IAM",
-                    identity.id,
-                    "Active identity lacks MFA",
-                    Severity::HIGH
-                });
+        List<AuditEvent> events() {
+            synchronized (events) {
+                return List.copyOf(events);
             }
         }
 
-        for (const auto& entry : storage.getResources()) {
-            if (!storage.isSecure(entry.first)) {
-                findings.push_back({
-                    "ENCRYPTION",
-                    entry.first,
-                    "Storage encryption is missing or invalid",
-                    Severity::CRITICAL
-                });
+        Map<Severity, Long> aggregate() {
+            synchronized (events) {
+                return events.stream().collect(
+                    Collectors.groupingBy(
+                        AuditEvent::severity,
+                        Collectors.counting()
+                    )
+                );
             }
         }
+    }
 
-        if (network.ruleCount() == 0) {
-            findings.push_back({
-                "NETWORK",
-                network.getName(),
-                "No explicit network rules",
-                Severity::HIGH
-            });
+    // ========================================================
+    // SECURITY POSTURE
+    // ========================================================
+
+    record SecurityFinding(
+        String category,
+        String resource,
+        Severity severity,
+        String description
+    ) {}
+
+    static final class SecurityAssessmentService {
+
+        List<SecurityFinding> evaluate(
+            IAMService iam,
+            StorageService storage,
+            NetworkSecurityGroup network
+        ) {
+
+            List<SecurityFinding> findings = new ArrayList<>();
+
+            for (Identity identity : iam.identities()) {
+                if (
+                    identity.status == IdentityStatus.ACTIVE &&
+                    !identity.mfaEnabled
+                ) {
+                    findings.add(new SecurityFinding(
+                        "IAM",
+                        identity.id,
+                        Severity.HIGH,
+                        "Active identity lacks MFA"
+                    ));
+                }
+            }
+
+            for (StorageResource resource : storage.resources()) {
+                if (!storage.isSecure(resource.id)) {
+                    findings.add(new SecurityFinding(
+                        "ENCRYPTION",
+                        resource.id,
+                        Severity.CRITICAL,
+                        "Storage is not protected by an enabled key"
+                    ));
+                }
+            }
+
+            if (network.ruleCount() == 0) {
+                findings.add(new SecurityFinding(
+                    "NETWORK",
+                    network.name(),
+                    Severity.HIGH,
+                    "Network policy contains no explicit rules"
+                ));
+            }
+
+            return List.copyOf(findings);
+        }
+    }
+
+    // ========================================================
+    // ENTERPRISE GOVERNANCE SERVICE
+    // ========================================================
+
+    static final class CloudSecurityService {
+
+        private final IAMService iam = new IAMService();
+
+        private final KeyManagementService kms =
+            new KeyManagementService();
+
+        private final StorageService storage =
+            new StorageService(kms);
+
+        private final NetworkSecurityGroup network =
+            new NetworkSecurityGroup("production-vpc");
+
+        private final AuditService audit =
+            new AuditService();
+
+        private final SecurityAssessmentService assessment =
+            new SecurityAssessmentService();
+
+        void registerIdentity(Identity identity) {
+            iam.register(identity);
         }
 
-        return findings;
-    }
-};
-
-// ============================================================
-// CLOUD GOVERNANCE APPLICATION
-// ============================================================
-
-class CloudSecurityPlatform {
-
-private:
-    KeyManagementService kms;
-    StorageService storage;
-    IAMEngine iam;
-    NetworkSecurityGroup network;
-    AuditLogger audit;
-    SecurityPostureEngine posture;
-
-public:
-
-    CloudSecurityPlatform()
-        : storage(kms),
-          network("production-vpc") {}
-
-    KeyManagementService& keyManager() {
-        return kms;
-    }
-
-    StorageService& storageService() {
-        return storage;
-    }
-
-    IAMEngine& iamEngine() {
-        return iam;
-    }
-
-    NetworkSecurityGroup& networkGroup() {
-        return network;
-    }
-
-    bool execute(
-        const string& identity,
-        const string& action,
-        const string& resource
-    ) {
-
-        bool permitted = iam.authorize(
-            identity,
-            action,
-            resource
-        );
-
-        audit.record(
-            identity,
-            action,
-            resource,
-            permitted ? "ALLOWED" : "DENIED",
-            permitted ? Severity::LOW : Severity::HIGH
-        );
-
-        return permitted;
-    }
-
-    vector<SecurityFinding> evaluate() const {
-        return posture.evaluate(iam, storage, kms, network);
-    }
-
-    void printReport() const {
-        auto findings = evaluate();
-
-        cout << "\nCLOUD SECURITY REPORT\n";
-
-        cout << "Identities: "
-             << iam.getIdentities().size() << '\n';
-
-        cout << "Storage resources: "
-             << storage.getResources().size() << '\n';
-
-        cout << "Audit events: "
-             << audit.size() << '\n';
-
-        cout << "Findings: "
-             << findings.size() << '\n';
-
-        for (const auto& finding : findings) {
-            cout
-                << "[" << toString(finding.severity) << "] "
-                << finding.category << " | "
-                << finding.resource << " | "
-                << finding.description << '\n';
+        ManagedKey createKey(String alias) {
+            return kms.createKey(alias);
         }
 
-        cout << "Posture: "
-             << (findings.empty() ? "COMPLIANT" : "ACTION REQUIRED")
-             << '\n';
+        void provisionStorage(StorageResource resource) {
+            storage.provision(resource);
+        }
 
-        audit.print();
-    }
-};
+        void encryptStorage(String resource, String keyId) {
+            storage.encrypt(resource, keyId);
+        }
 
-// ============================================================
-// TESTS
-// ============================================================
+        void addNetworkRule(NetworkRule rule) {
+            network.addRule(rule);
+        }
 
-void runTests() {
+        boolean execute(
+            String identity,
+            String action,
+            String resource
+        ) {
 
-    CloudSecurityPlatform platform;
+            boolean permitted = iam.authorize(
+                identity,
+                action,
+                resource,
+                true
+            );
 
-    IAMPolicy policy;
+            audit.record(
+                identity,
+                action,
+                resource,
+                permitted ? "ALLOWED" : "DENIED",
+                permitted ? Severity.LOW : Severity.HIGH
+            );
 
-    policy.addStatement({
-        Effect::ALLOW,
-        {"storage:read"},
-        {"bucket:production/*"}
-    });
+            return permitted;
+        }
 
-    policy.addStatement({
-        Effect::DENY,
-        {"storage:delete"},
-        {"*"}
-    });
+        List<SecurityFinding> assess() {
+            return assessment.evaluate(iam, storage, network);
+        }
 
-    Identity identity{
-        "service-account-01",
-        policy,
-        true,
-        true,
-        false
-    };
+        void printReport() {
 
-    platform.iamEngine().registerIdentity(identity);
+            List<SecurityFinding> findings = assess();
 
-    if (!platform.execute(
-        "service-account-01",
-        "storage:read",
-        "bucket:production/reports"
-    )) {
-        throw runtime_error("IAM allow test failed");
-    }
+            System.out.println("\nCLOUD SECURITY REPORT");
 
-    if (platform.execute(
-        "service-account-01",
-        "storage:delete",
-        "bucket:production/reports"
-    )) {
-        throw runtime_error("Explicit deny test failed");
-    }
+            System.out.println(
+                "Identities: " + iam.identities().size()
+            );
 
-    if (platform.execute(
-        "service-account-01",
-        "storage:admin",
-        "bucket:production/reports"
-    )) {
-        throw runtime_error("Default deny test failed");
-    }
+            System.out.println(
+                "Storage resources: " + storage.resources().size()
+            );
 
-    string keyId = platform.keyManager().createKey(
-        "production-key"
-    );
+            System.out.println(
+                "Audit events: " + audit.events().size()
+            );
 
-    platform.storageService().provision({
-        "database-backup",
-        "database-team",
-        Environment::PRODUCTION,
-        ResourceState::ACTIVE,
-        nullopt
-    });
+            System.out.println(
+                "Findings: " + findings.size()
+            );
 
-    platform.storageService().encrypt(
-        "database-backup",
-        keyId
-    );
+            findings.forEach(finding ->
+                System.out.println(
+                    "[" + finding.severity() + "] " +
+                    finding.category() + " | " +
+                    finding.resource() + " | " +
+                    finding.description()
+                )
+            );
 
-    if (!platform.storageService().isSecure("database-backup")) {
-        throw runtime_error("Encryption test failed");
+            System.out.println(
+                "Security status: " +
+                (findings.isEmpty() ? "COMPLIANT" : "ACTION REQUIRED")
+            );
+
+            System.out.println(
+                "Audit aggregation: " + audit.aggregate()
+            );
+        }
     }
 
-    platform.networkGroup().addRule({
-        "application-subnet",
-        "database-subnet",
-        5432,
-        "TCP",
-        Effect::ALLOW
-    });
+    // ========================================================
+    // INTEGRATION TESTS
+    // ========================================================
 
-    platform.networkGroup().addRule({
-        "internet",
-        "database-subnet",
-        5432,
-        "TCP",
-        Effect::DENY
-    });
+    static void runTests() {
 
-    if (!platform.networkGroup().permits(
-        "application-subnet",
-        "database-subnet",
-        5432,
-        "TCP"
-    )) {
-        throw runtime_error("Network allow test failed");
+        CloudSecurityService service = new CloudSecurityService();
+
+        IAMPolicy policy = new IAMPolicy(
+            "application-reader",
+            List.of(
+                new PolicyStatement(
+                    Effect.ALLOW,
+                    Set.of("storage:read"),
+                    Set.of("bucket:production/*")
+                ),
+                new PolicyStatement(
+                    Effect.DENY,
+                    Set.of("storage:delete"),
+                    Set.of("*")
+                )
+            )
+        );
+
+        Identity identity = new Identity(
+            "application-service",
+            policy,
+            IdentityStatus.ACTIVE,
+            true
+        );
+
+        identity.addBoundary("bucket:production/*");
+
+        service.registerIdentity(identity);
+
+        if (!service.execute(
+            "application-service",
+            "storage:read",
+            "bucket:production/reports"
+        )) {
+            throw new AssertionError("IAM allow failed");
+        }
+
+        if (service.execute(
+            "application-service",
+            "storage:delete",
+            "bucket:production/reports"
+        )) {
+            throw new AssertionError("Explicit deny failed");
+        }
+
+        if (service.execute(
+            "application-service",
+            "storage:read",
+            "bucket:development/reports"
+        )) {
+            throw new AssertionError("Permissions boundary failed");
+        }
+
+        ManagedKey key = service.createKey("production-key");
+
+        service.provisionStorage(new StorageResource(
+            "database-backup",
+            "database-team",
+            Environment.PRODUCTION
+        ));
+
+        service.encryptStorage(
+            "database-backup",
+            key.keyId()
+        );
+
+        service.addNetworkRule(new NetworkRule(
+            "application-subnet",
+            "database-subnet",
+            5432,
+            "TCP",
+            Effect.ALLOW
+        ));
+
+        service.addNetworkRule(new NetworkRule(
+            "internet",
+            "database-subnet",
+            5432,
+            "TCP",
+            Effect.DENY
+        ));
+
+        if (!service.network.permits(
+            "application-subnet",
+            "database-subnet",
+            5432,
+            "TCP"
+        )) {
+            throw new AssertionError("Network allow failed");
+        }
+
+        if (service.network.permits(
+            "internet",
+            "database-subnet",
+            5432,
+            "TCP"
+        )) {
+            throw new AssertionError("Network deny failed");
+        }
+
+        if (!service.assess().isEmpty()) {
+            throw new AssertionError(
+                "Unexpected security findings"
+            );
+        }
+
+        System.out.println("All Java 17 security tests passed.");
+
+        service.printReport();
     }
 
-    if (platform.networkGroup().permits(
-        "internet",
-        "database-subnet",
-        5432,
-        "TCP"
-    )) {
-        throw runtime_error("Network deny test failed");
-    }
+    // ========================================================
+    // APPLICATION ENTRY POINT
+    // ========================================================
 
-    cout << "All C++17 security tests passed.\n";
+    public static void main(String[] args) {
 
-    platform.printReport();
-}
+        try {
+            runTests();
+        } catch (RuntimeException exception) {
+            System.err.println(
+                "Cloud security failure: " +
+                exception.getMessage()
+            );
 
-// ============================================================
-// MAIN
-// ============================================================
-
-int main() {
-
-    try {
-        runTests();
-        return 0;
-    }
-    catch (const exception& error) {
-        cerr << "Security engine error: "
-             << error.what() << '\n';
-
-        return 1;
+            System.exit(1);
+        }
     }
 }
